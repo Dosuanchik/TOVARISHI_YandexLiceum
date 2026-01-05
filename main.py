@@ -735,8 +735,7 @@ class GameView(BaseView):
         bottom = SCREEN_HEIGHT - TOP_BAR
         if hasattr(arcade, "draw_lrbt_rectangle_filled"):
             arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH, bottom, top, C_PANEL)
-        else:
-            arcade.draw_lrtb_rectangle_filled(0, SCREEN_WIDTH, top, bottom, C_PANEL)
+        
 
         # Заголовки полей
         self._title_player.draw()
