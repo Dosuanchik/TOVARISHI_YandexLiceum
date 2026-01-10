@@ -623,91 +623,89 @@ class ShipPlacementView(BaseView):
         self._rebuild_text()
 
     def _rebuild_text(self):
+        # Отступ от правого края экрана
+        right_margin = SCREEN_WIDTH - 30
+        left_margin = 20
+
         self.texts = [
-            arcade.Text("РАССТАНОВКА КОРАБЛЕЙ", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT - 60, arcade.color.GOLD, 24, bold=True,
-                        anchor_x="center", anchor_y="center"),
-            arcade.Text("Ваше поле", PLAYER_GRID_ORIGIN[0],
-                        SCREEN_HEIGHT - 40, C_TEXT, 16,
-                        anchor_x="left", anchor_y="baseline"),
-            arcade.Text("Корабли для расстановки",
-                        PLAYER_GRID_ORIGIN[0] + CELL_SIZE * GRID_SIZE + 40,
-                        SCREEN_HEIGHT - 40, C_TEXT, 16,
-                        anchor_x="left", anchor_y="baseline"),
-            arcade.Text("Перетащите корабли на поле", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT - 90, C_TEXT, 14,
-                        anchor_x="center", anchor_y="center"),
-            arcade.Text("R - повернуть, Backspace - удалить последний",
-                        SCREEN_WIDTH / 2, SCREEN_HEIGHT - 110, C_TEXT, 12,
-                        anchor_x="center", anchor_y="center"),
-            arcade.Text("Enter - начать игру", SCREEN_WIDTH / 2, 40,
-                        arcade.color.LIGHT_GREEN, 16, bold=True,
-                        anchor_x="center", anchor_y="center"),
-            arcade.Text("Esc - меню", SCREEN_WIDTH / 2, 20, C_TEXT, 12,
-                        anchor_x="center", anchor_y="center"),
+            # Заголовок - правый верхний угол
+            arcade.Text("РАССТАНОВКА КОРАБЛЕЙ", left_margin,
+                        SCREEN_HEIGHT - 40, arcade.color.GOLD, 22, bold=True,
+                        anchor_x="left", anchor_y="center"),
+
+            # Инструкции - сразу под заголовком
+            arcade.Text("R: Поворот | Backspace: Сброс | Enter: Старт",
+                        right_margin, SCREEN_HEIGHT - 75, arcade.color.ASH_GREY, 10,
+                        anchor_x="right"),
+
+            # Статус готовности - под инструкциями
+            arcade.Text("РАССТАВЬТЕ ВСЕ КОРАБЛИ",
+                        right_margin, SCREEN_HEIGHT - 105, arcade.color.DIM_GRAY, 14, bold=True,
+                        anchor_x="right"),
+
+            # ESC - еще чуть ниже
+            arcade.Text("ESC - В МЕНЮ", right_margin, SCREEN_HEIGHT - 135,
+                        arcade.color.ASH_GREY, 10, anchor_x="right"),
+
+            # Подписи зон остаются над своими объектами для ясности
+            arcade.Text("ВАШЕ ПОЛЕ", PLAYER_GRID_ORIGIN[0],
+                        PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 10,
+                        arcade.color.WHITE, 12, bold=True, anchor_x="left"),
+
+            arcade.Text("ДОСТУПНЫЕ КОРАБЛИ",
+                        PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 80,
+                        PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 10,
+                        arcade.color.WHITE, 12, bold=True, anchor_x="left"),
         ]
 
     def on_draw(self):
         self.clear()
 
-        # Рисуем тексты
-        for text in self.texts:
-            text.draw()
+        # 1. РАСЧЕТ ЗОНЫ "ДОКА" (ПРАВАЯ ПАНЕЛЬ)
+        dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 70
+        dock_right = dock_left + 300
+        dock_bottom = PLAYER_GRID_ORIGIN[1] - 20
+        dock_top = PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 40
 
-        # Рисуем поле игрока
+        # ИСПОЛЬЗУЕМ ПРАВИЛЬНОЕ ИМЯ: draw_lrbt_rectangle_filled
+        arcade.draw_lrbt_rectangle_filled(dock_left, dock_right, dock_bottom, dock_top, (20, 30, 45))
+        arcade.draw_lrbt_rectangle_outline(dock_left, dock_right, dock_bottom, dock_top, (60, 70, 90), 2)
+
+        # 2. РИСУЕМ ИГРОВОЕ ПОЛЕ
         self._draw_board(PLAYER_GRID_ORIGIN, self.board, show_ships=True)
         self._draw_grid_lines(PLAYER_GRID_ORIGIN)
 
-        # Рисуем доступные корабли в 2 столбца
-        ships_x_left = PLAYER_GRID_ORIGIN[0] + CELL_SIZE * GRID_SIZE + 60
-        ships_x_right = ships_x_left + 120  # Второй столбец правее
-        ships_y_start = SCREEN_HEIGHT - 120  # Начальная позиция
+        # 3. РИСУЕМ КОРАБЛИ В ДОКЕ
+        start_x = dock_left + 75
+        start_y = dock_top - 60
 
         for i, ship_info in enumerate(self.available_ships):
             if ship_info['placed']:
                 continue
 
-            # Определяем столбец и строку
-            col = i % 2  # 0 - левый, 1 - правый
-            row = i // 2
+            col, row = i % 2, i // 2
+            current_x = start_x + (col * 140)
+            current_y = start_y - (row * 75)
 
-            # Выбираем x в зависимости от столбца
-            ships_x = ships_x_left if col == 0 else ships_x_right
-            y = ships_y_start - row * 50  # 50 пикселей между строками
+            # Подложка слота
+            draw_rect_filled(current_x, current_y, 120, 45, (40, 50, 65))
 
-            # Фон для корабля - используем draw_polygon_filled
-            half_width = CELL_SIZE * 2.5  # Ширина фона
-            half_height = (CELL_SIZE) / 2  # Высота фона
+            if not ship_info['dragging']:
+                self.sprites.draw_ship(current_x, current_y + 5,
+                                       ship_info['length'], ship_info['horizontal'])
+                arcade.draw_text(f"{ship_info['length']}-палубный", current_x, current_y - 25,
+                                 arcade.color.ASH_GREY, 9, anchor_x="center")
 
-            # Проверяем, чтобы корабль не уходил за нижний край экрана
-            if y - half_height < 50:  # 50px от нижнего края
-                y = 50 + half_height  # Поднимаем выше
+        # 4. РИСУЕМ ПЕРЕТАСКИВАЕМЫЙ КОРАБЛЬ
+        if self.dragging_ship:
+            self.sprites.draw_ship(self.dragging_ship['drag_x'],
+                                   self.dragging_ship['drag_y'],
+                                   self.dragging_ship['length'],
+                                   self.dragging_ship['horizontal'])
 
-            arcade.draw_polygon_filled([
-                (ships_x - half_width, y - half_height),
-                (ships_x + half_width, y - half_height),
-                (ships_x + half_width, y + half_height),
-                (ships_x - half_width, y + half_height),
-            ], C_DRAG_SHIPS)
-
-            # Корабль
-            if ship_info['dragging']:
-                x = ship_info['drag_x']
-                y = ship_info['drag_y']
-                color = arcade.color.LIGHT_GREEN
-            else:
-                x = ships_x
-                color = C_SHIP
-
-            length = ship_info['length']
-            horizontal = ship_info['horizontal']
-
-            # Используем существующий метод из GameSprites
-            self.sprites.draw_ship(x, y, length, horizontal)
-
-            # Текст с размером
-            arcade.draw_text(f"{length}-палубный", ships_x - 50, y - 25,
-                             arcade.color.WHITE, 12)
+        # 5. ТЕКСТЫ
+        for text in self.texts:
+            text.draw()
 
     def _draw_board(self, origin: Tuple[int, int], board: Board, show_ships: bool):
         """Отрисовывает поле."""
@@ -723,7 +721,7 @@ class ShipPlacementView(BaseView):
                 if show_ships and (x, y) in board.ship_cells:
                     color = C_SHIP
 
-                # Используем нашу функцию для рисования прямоугольника
+                # Используем функцию из примеров
                 draw_rect_filled(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2, color)
 
     def _draw_grid_lines(self, origin: Tuple[int, int]):
@@ -751,69 +749,48 @@ class ShipPlacementView(BaseView):
         return None
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
-        """Обработка нажатия мыши."""
         if button != arcade.MOUSE_BUTTON_LEFT:
             return
 
-        # Проверяем, нажали ли на доступный корабль
-        ships_x_left = PLAYER_GRID_ORIGIN[0] + CELL_SIZE * GRID_SIZE + 60
-        ships_x_right = ships_x_left + 120
-        ships_y_start = SCREEN_HEIGHT - 120
+        if not self.dragging_ship:
+            # ТЕ ЖЕ РАСЧЕТЫ, ЧТО В ON_DRAW
+            dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 70
+            dock_top = PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 40
+            start_x = dock_left + 75
+            start_y = dock_top - 60
 
-        for i, ship_info in enumerate(self.available_ships):
-            if ship_info['placed']:
-                continue
+            for i, ship_info in enumerate(self.available_ships):
+                if ship_info['placed']:
+                    continue
 
-            # Определяем столбец и строку
-            col = i % 2
-            row = i // 2
+                col, row = i % 2, i // 2
+                current_x = start_x + (col * 140)
+                current_y = start_y - (row * 75) + 5 # Центр корабля чуть выше центра слота
 
-            # Выбираем x в зависимости от столбца
-            ships_x = ships_x_left if col == 0 else ships_x_right
-            ship_y = ships_y_start - row * 50
+                length = ship_info['length']
+                w, h = (length * CELL_SIZE, CELL_SIZE) if ship_info['horizontal'] else (CELL_SIZE, length * CELL_SIZE)
 
-            length = ship_info['length']
-            horizontal = ship_info['horizontal']
+                if (current_x - w/2 <= x <= current_x + w/2 and
+                        current_y - h/2 <= y <= current_y + h/2):
+                    self.dragging_ship = ship_info
+                    self.drag_offset_x = x - current_x
+                    self.drag_offset_y = y - current_y
+                    ship_info['dragging'] = True
+                    return
 
-            # Вычисляем размеры корабля
-            if horizontal:
-                ship_width = CELL_SIZE * length
-                ship_height = CELL_SIZE
-            else:
-                ship_width = CELL_SIZE
-                ship_height = CELL_SIZE * length
-
-            ship_left = ships_x - ship_width / 2
-            ship_right = ships_x + ship_width / 2
-            ship_bottom = ship_y - ship_height / 2
-            ship_top = ship_y + ship_height / 2
-
-            if (ship_left <= x <= ship_right and
-                    ship_bottom <= y <= ship_top):
-                self.dragging_ship = ship_info
-                self.drag_offset_x = x - ships_x
-                self.drag_offset_y = y - ship_y
-                ship_info['dragging'] = True
-                ship_info['drag_x'] = x - self.drag_offset_x
-                ship_info['drag_y'] = y - self.drag_offset_y
-                return
-
-        # Проверяем, нажали ли на поле для размещения корабля
+        # Установка на поле
         if self.dragging_ship:
             grid_pos = self._screen_to_grid(x, y, PLAYER_GRID_ORIGIN)
             if grid_pos:
                 gx, gy = grid_pos
-                ship = Ship(self.dragging_ship['length'], gx, gy,
-                            self.dragging_ship['horizontal'])
+                ship = Ship(self.dragging_ship['length'], gx, gy, self.dragging_ship['horizontal'])
 
                 if self.board.can_place_ship(ship, self.board.ships):
                     self.board.place_ship(ship)
                     self.dragging_ship['placed'] = True
-
-                    # Проверяем, все ли корабли расставлены
-                    if all(ship['placed'] for ship in self.available_ships):
-                        self.texts[-2].color = arcade.color.GREEN
-                        self.texts[-2].text = "Все корабли расставлены! Нажмите Enter"
+                    if all(s['placed'] for s in self.available_ships):
+                        self.texts[-2].text = "ГОТОВ К БОЮ! НАЖМИ ENTER"
+                        self.texts[-2].color = arcade.color.NEON_GREEN
 
             self.dragging_ship['dragging'] = False
             self.dragging_ship = None
@@ -841,11 +818,16 @@ class ShipPlacementView(BaseView):
                 last_ship = self.board.ships[-1]
                 self.board.remove_ship(last_ship)
 
-                # Находим и сбрасываем соответствующий доступный корабль
                 for ship_info in self.available_ships:
-                    if ship_info['placed']:
+                    if ship_info['placed'] and ship_info['length'] == last_ship.length:
                         ship_info['placed'] = False
                         break
+                # -----------------------------------------------------------------
+
+                # Возвращаем цвет текста, если удалили корабль после завершения расстановки
+                self.texts[-2].color = arcade.color.LIGHT_GREEN
+                self.texts[-2].text = "Enter - начать игру"
+
 
         elif symbol == arcade.key.ENTER:
             # Начало игры
@@ -913,44 +895,41 @@ class GameView(BaseView):
         self._rebuild_text()
 
     def _rebuild_text(self):
+        # Чтобы текст не лежал на поле, привязываем его к SCREEN_HEIGHT
         self.texts = [
-            arcade.Text("МОРСКОЙ БОЙ", SCREEN_WIDTH / 2, SCREEN_HEIGHT - 40,
+            arcade.Text("МОРСКОЙ БОЙ", SCREEN_WIDTH / 2, SCREEN_HEIGHT - 30,
                         arcade.color.GOLD, 20, bold=True,
                         anchor_x="center", anchor_y="center"),
+
+            # Подписи полей теперь учитывают высоту сетки
             arcade.Text("Ваше поле", PLAYER_GRID_ORIGIN[0],
-                        SCREEN_HEIGHT - 70, C_TEXT, 14,
-                        anchor_x="left", anchor_y="baseline"),
+                        PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 10,
+                        C_TEXT, 12, bold=True),
+
             arcade.Text("Поле противника", ENEMY_GRID_ORIGIN[0],
-                        SCREEN_HEIGHT - 70, C_TEXT, 14,
-                        anchor_x="left", anchor_y="baseline"),
+                        ENEMY_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 10,
+                        C_TEXT, 12, bold=True),
         ]
 
     def on_draw(self):
         self.clear()
 
-        # Верхняя панель
-        draw_rect_filled(SCREEN_WIDTH / 2, SCREEN_HEIGHT - TOP_BAR / 2,
-                         SCREEN_WIDTH, TOP_BAR, C_PANEL)
+        # Верхняя панель (фон для текстов)
+        arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH,
+                                         SCREEN_HEIGHT - 100, SCREEN_HEIGHT,
+                                         (20, 30, 45))
 
         # Тексты
         for text in self.texts:
             text.draw()
 
-        # Статус игры
+        # Статус игры (поднимаем выше, чтобы не наезжало на поле)
         turn_text = "Ваш ход" if self.player_turn else "Ход компьютера"
         status_text = f"Сложность: {self.difficulty} | {turn_text}"
-
-        arcade.draw_text(status_text, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 70,
-                         C_TEXT, 14, anchor_x="center", anchor_y="center")
-
-        arcade.draw_text(self.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 90,
-                         C_TEXT, 12, anchor_x="center", anchor_y="center")
-
-        arcade.draw_text(f"Выстрелов: {self.shots_total} | Попаданий: {self.hits}",
-                         20, SCREEN_HEIGHT - 110, C_TEXT, 12)
-
-        arcade.draw_text("Esc - меню", SCREEN_WIDTH - 20, SCREEN_HEIGHT - 24,
-                         C_TEXT, 12, anchor_x="right")
+        arcade.draw_text(status_text, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 60,
+                         C_TEXT, 13, anchor_x="center")
+        arcade.draw_text(self.message, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 80,
+                         arcade.color.LIGHT_GRAY, 11, anchor_x="center")
 
         # Поля
         self._draw_board(PLAYER_GRID_ORIGIN, self.player_board, show_ships=True)
@@ -961,56 +940,61 @@ class GameView(BaseView):
         self._draw_grid_lines(ENEMY_GRID_ORIGIN)
 
     def _draw_board(self, origin: Tuple[int, int], board: Board, show_ships: bool):
-        """Отрисовывает игровое поле со спрайтами."""
+        """Отрисовывает игровое поле со спрайтами: слои по порядку."""
         ox, oy = origin
 
-        # Фон клеток
+        # СЛОЙ 1: Фон клеток
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                cx = ox + x * CELL_SIZE + CELL_SIZE / 2
+                cy = oy + y * CELL_SIZE + CELL_SIZE / 2
+                # Темная подложка клетки
+                draw_rect_filled(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2, (30, 40, 55))
+
+        # СЛОЙ 2: Корабли (свои или потопленные чужие)
+        if show_ships:
+            for ship in board.ships:
+                length = ship.length
+                if ship.horizontal:
+                    center_x = ox + (ship.x + length / 2) * CELL_SIZE
+                    center_y = oy + (ship.y + 0.5) * CELL_SIZE
+                else:
+                    center_x = ox + (ship.x + 0.5) * CELL_SIZE
+                    center_y = oy + (ship.y + length / 2) * CELL_SIZE
+
+                self.sprites.draw_ship(center_x, center_y, length, ship.horizontal)
+        else:
+            # Для поля врага рисуем только полностью потопленные корабли
+            for ship in board.ships:
+                if ship.is_sunk:
+                    length = ship.length
+                    if ship.horizontal:
+                        center_x = ox + (ship.x + length / 2) * CELL_SIZE
+                        center_y = oy + (ship.y + 0.5) * CELL_SIZE
+                    else:
+                        center_x = ox + (ship.x + 0.5) * CELL_SIZE
+                        center_y = oy + (ship.y + length / 2) * CELL_SIZE
+                    # Рисуем контур или полупрозрачный корабль
+                    self.sprites.draw_ship(center_x, center_y, length, ship.horizontal)
+                    # Дополнительно выделим красным, что он "всё"
+                    draw_rect_outline(center_x, center_y,
+                                      (length * CELL_SIZE if ship.horizontal else CELL_SIZE) - 2,
+                                      (CELL_SIZE if ship.horizontal else length * CELL_SIZE) - 2,
+                                      arcade.color.RED, 2)
+
+        # СЛОЙ 3: Эффекты (Промахи и Попадания) — ВСЕГДА ПОВЕРХ ВСЕГО
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
                 cx = ox + x * CELL_SIZE + CELL_SIZE / 2
                 cy = oy + y * CELL_SIZE + CELL_SIZE / 2
 
-                # Фон клетки
-                draw_rect_filled(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2, C_UNKNOWN)
-
-                # Промахи (спрайт вместо закрашенной клетки)
+                # Рисуем промах (синяя точка/крестик)
                 if (x, y) in board.misses:
                     self.sprites.draw_miss(cx, cy)
 
-                # Попадания (спрайт огня)
+                # Рисуем огонь/взрыв (рисуется поверх корабля)
                 if (x, y) in board.hits:
                     self.sprites.draw_fire(cx, cy)
-
-        # Корабли (только для своего поля или если потоплены)
-        if show_ships:
-            for ship in board.ships:
-                for i, (sx, sy) in enumerate(ship.cells):
-                    cx = ox + sx * CELL_SIZE + CELL_SIZE / 2
-                    cy = oy + sy * CELL_SIZE + CELL_SIZE / 2
-
-                    # Для горизонтальных кораблей центрируем по длине
-                    if ship.horizontal:
-                        ship_x = ox + (ship.x + ship.length / 2 - 0.5) * CELL_SIZE
-                        ship_y = oy + (ship.y + 0.5) * CELL_SIZE
-                        if i == 0:  # Рисуем корабль один раз
-                            self.sprites.draw_ship(ship_x, ship_y, ship.length, True)
-                    else:
-                        ship_x = ox + (ship.x + 0.5) * CELL_SIZE
-                        ship_y = oy + (ship.y + ship.length / 2 - 0.5) * CELL_SIZE
-                        if i == 0:  # Рисуем корабль один раз
-                            self.sprites.draw_ship(ship_x, ship_y, ship.length, False)
-
-        # Потопленные корабли противника
-        elif not show_ships:
-            for ship in board.ships:
-                if ship.is_sunk:
-                    for sx, sy in ship.cells:
-                        cx = ox + sx * CELL_SIZE + CELL_SIZE / 2
-                        cy = oy + sy * CELL_SIZE + CELL_SIZE / 2
-
-                        # Контур потопленного корабля
-                        draw_rect_outline(cx, cy, CELL_SIZE - 4, CELL_SIZE - 4,
-                                          arcade.color.RED, 2)
 
     def _draw_grid_lines(self, origin: Tuple[int, int]):
         """Рисует линии сетки."""
