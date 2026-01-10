@@ -717,7 +717,7 @@ class ShipPlacementView(BaseView):
                 cx = ox + x * CELL_SIZE + CELL_SIZE / 2
                 cy = oy + y * CELL_SIZE + CELL_SIZE / 2
 
-                color = C_UNKNOWN
+                color = (30, 40, 55)
                 if show_ships and (x, y) in board.ship_cells:
                     color = C_SHIP
 
