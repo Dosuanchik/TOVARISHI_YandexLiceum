@@ -629,13 +629,17 @@ class ShipPlacementView(BaseView):
         dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 200
 
         self.texts = [
+            arcade.Text("R: Поворот | Backspace: Сброс | Enter: Старт",
+                        right_margin, SCREEN_HEIGHT - 30, arcade.color.ASH_GREY, 10,
+                        anchor_x="right"),
+
+            arcade.Text("Space: Быстрая расстановка",
+                        right_margin, SCREEN_HEIGHT - 45, arcade.color.ASH_GREY, 10,
+                        anchor_x="right"),
+
             arcade.Text("РАССТАНОВКА КОРАБЛЕЙ", SCREEN_WIDTH / 2, SCREEN_HEIGHT - 50,
                         arcade.color.GOLD, 20, bold=True,
                         anchor_x="center", anchor_y="center"),
-
-            arcade.Text("R: Поворот | Backspace: Сброс | Enter: Старт",
-                        right_margin, SCREEN_HEIGHT - 40, arcade.color.ASH_GREY, 10,
-                        anchor_x="right"),
 
             arcade.Text("РАССТАВЬТЕ ВСЕ КОРАБЛИ",
                         right_margin, SCREEN_HEIGHT - 65, arcade.color.DIM_GRAY, 14, bold=True,
@@ -785,6 +789,52 @@ class ShipPlacementView(BaseView):
             self.dragging_ship['dragging'] = False
             self.dragging_ship = None
 
+    def _random_placement(self):
+        """Случайно расставляет корабли на поле."""
+        self.board = Board()  # Сбрасываем поле полностью
+
+        # Сбрасываем статус всех кораблей в UI
+        for ship_info in self.available_ships:
+            ship_info['placed'] = False
+
+        # Пытаемся расставить каждый корабль
+        for ship_info in self.available_ships:
+            placed = False
+            attempts = 0
+            while not placed and attempts < 1000:  # Защита от вечного цикла
+                attempts += 1
+                length = ship_info['length']
+                horizontal = random.choice([True, False])
+
+                # Вычисляем максимальные координаты, чтобы корабль не вылез за границы
+                max_x = GRID_SIZE - length if horizontal else GRID_SIZE - 1
+                max_y = GRID_SIZE - 1 if horizontal else GRID_SIZE - length
+
+                gx = random.randint(0, max_x)
+                gy = random.randint(0, max_y)
+
+                new_ship = Ship(length, gx, gy, horizontal)
+
+                if self.board.can_place_ship(new_ship, self.board.ships):
+                    self.board.place_ship(new_ship)
+
+                    # Обновляем инфо для UI
+                    ship_info['placed'] = True
+                    ship_info['horizontal'] = horizontal
+                    placed = True
+
+        # Обновляем текст готовности
+        self._check_ready_state()
+
+    def _check_ready_state(self):
+        """Проверяет, все ли расставлено, и меняет цвет текста."""
+        if all(s['placed'] for s in self.available_ships):
+            self.texts[2].text = "ГОТОВ К БОЮ! НАЖМИ ENTER"
+            self.texts[2].color = arcade.color.NEON_GREEN
+        else:
+            self.texts[2].text = "РАССТАВЬТЕ ВСЕ КОРАБЛИ"
+            self.texts[2].color = arcade.color.DIM_GRAY
+
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
         """Обработка движения мыши при перетаскивании."""
         if self.dragging_ship:
@@ -795,12 +845,18 @@ class ShipPlacementView(BaseView):
         """Обработка отпускания мыши."""
         if button == arcade.MOUSE_BUTTON_LEFT and self.dragging_ship:
             self.on_mouse_press(x, y, button, modifiers)
-
     def on_key_press(self, symbol: int, modifiers: int):
         """Обработка нажатия клавиш."""
         if symbol == arcade.key.R and self.dragging_ship:
             # Поворот корабля
             self.dragging_ship['horizontal'] = not self.dragging_ship['horizontal']
+
+        elif symbol == arcade.key.SPACE:
+            # Если что-то тащим — отменяем перетаскивание перед рандомом
+            if self.dragging_ship:
+                self.dragging_ship['dragging'] = False
+                self.dragging_ship = None
+            self._random_placement()
 
         elif symbol == arcade.key.BACKSPACE:
             # Удаление последнего корабля
@@ -812,7 +868,6 @@ class ShipPlacementView(BaseView):
                     if ship_info['placed'] and ship_info['length'] == last_ship.length:
                         ship_info['placed'] = False
                         break
-                # -----------------------------------------------------------------
 
                 # Возвращаем цвет текста, если удалили корабль после завершения расстановки
                 self.texts[-2].color = arcade.color.LIGHT_GREEN
@@ -855,8 +910,8 @@ class GameView(BaseView):
         self.victory_delay = 0
 
         # Звуки
-        self.Miss_SOUND = arcade.load_sound(":resources:sounds/Miss.mp3")
-        self.Popal_SOUND = arcade.load_sound(":resources:sounds/PopalNew.mp3")
+        self.Miss_SOUND = arcade.load_sound("sounds/Miss.mp3")
+        self.Popal_SOUND = arcade.load_sound("sounds/PopalNew.mp3")
 
         # Статистика
         self.shots_total = 0
@@ -985,12 +1040,10 @@ class GameView(BaseView):
                 # Рисуем промах (синяя точка/крестик)
                 if (x, y) in board.misses:
                     self.sprites.draw_miss(cx, cy)
-                    self.ship_playback = arcade.play_sound(self.Miss_SOUND)
 
                 # Рисуем огонь/взрыв (рисуется поверх корабля)
                 if (x, y) in board.hits:
                     self.sprites.draw_fire(cx, cy)
-                    self.ship_playback = arcade.play_sound(self.Popal_SOUND)
 
     def _draw_grid_lines(self, origin: Tuple[int, int]):
         """Рисует линии сетки."""
@@ -1041,6 +1094,7 @@ class GameView(BaseView):
         if result.hit:
             self.hits += 1
             self.message = "Попадание!"
+            self.ship_playback = arcade.play_sound(self.Popal_SOUND)
 
             if result.sunk_ship:
                 self.message = f"Корабль потоплен! ({result.sunk_ship.length}-палубный)"
@@ -1056,10 +1110,9 @@ class GameView(BaseView):
         else:
             self.misses += 1
             self.message = "Промах!"
+            self.ship_playback = arcade.play_sound(self.Miss_SOUND)
             self.player_turn = False
-
-            # Устанавливаем задержку для ИИ равную времени игрока (но не более 3 секунд)
-            self.ai_delay = min(time.time() - shot_time, 3.0)
+            self.ai_delay = 1.5
 
     def on_update(self, delta_time: float):
         """Обновление игровой логики."""
@@ -1085,6 +1138,7 @@ class GameView(BaseView):
 
         if result.hit:
             self.message = "Компьютер попал!"
+            self.ship_playback = arcade.play_sound(self.Popal_SOUND)
 
             if result.sunk_ship:
                 self.message = f"Компьютер потопил ваш {result.sunk_ship.length}-палубный корабль!"
@@ -1100,6 +1154,7 @@ class GameView(BaseView):
                 self.ai_delay = 1.0  # Пауза 1 секунда между выстрелами ИИ
         else:
             self.message = "Компьютер промахнулся. Ваш ход."
+            self.ship_playback = arcade.play_sound(self.Miss_SOUND)
             self.player_turn = True
 
     def _finish_game(self, won: bool):
