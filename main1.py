@@ -699,8 +699,6 @@ class ShipPlacementView(BaseView):
                                    self.dragging_ship['length'], self.dragging_ship['horizontal'])
         for t in self.texts: t.draw()
 
-
-
     def _draw_board(self, origin: Tuple[int, int], board: Board, show_ships: bool):
         """Отрисовывает поле."""
         ox, oy = origin
@@ -845,6 +843,7 @@ class ShipPlacementView(BaseView):
         """Обработка отпускания мыши."""
         if button == arcade.MOUSE_BUTTON_LEFT and self.dragging_ship:
             self.on_mouse_press(x, y, button, modifiers)
+
     def on_key_press(self, symbol: int, modifiers: int):
         """Обработка нажатия клавиш."""
         if symbol == arcade.key.R and self.dragging_ship:
@@ -965,8 +964,8 @@ class GameView(BaseView):
 
         # Верхняя панель (фон для текстов)
         arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH,
-                                         SCREEN_HEIGHT - 100, SCREEN_HEIGHT,
-                                         (20, 30, 45))
+                                          SCREEN_HEIGHT - 100, SCREEN_HEIGHT,
+                                          (20, 30, 45))
 
         # Тексты
         for text in self.texts:
