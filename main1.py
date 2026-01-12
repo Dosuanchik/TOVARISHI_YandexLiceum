@@ -854,6 +854,10 @@ class GameView(BaseView):
         self.game_over = False
         self.victory_delay = 0
 
+        # Звуки
+        self.Miss_SOUND = arcade.load_sound(":resources:sounds/Miss.mp3")
+        self.Popal_SOUND = arcade.load_sound(":resources:sounds/PopalNew.mp3")
+
         # Статистика
         self.shots_total = 0
         self.hits = 0
@@ -981,10 +985,12 @@ class GameView(BaseView):
                 # Рисуем промах (синяя точка/крестик)
                 if (x, y) in board.misses:
                     self.sprites.draw_miss(cx, cy)
+                    self.ship_playback = arcade.play_sound(self.Miss_SOUND)
 
                 # Рисуем огонь/взрыв (рисуется поверх корабля)
                 if (x, y) in board.hits:
                     self.sprites.draw_fire(cx, cy)
+                    self.ship_playback = arcade.play_sound(self.Popal_SOUND)
 
     def _draw_grid_lines(self, origin: Tuple[int, int]):
         """Рисует линии сетки."""
