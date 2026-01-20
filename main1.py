@@ -1103,6 +1103,8 @@ class GameView(BaseView):
                 self.message = "Все корабли противника уничтожены!"
                 self.game_over = True
                 self.victory_delay = 2.0  # Задержка 2 секунды перед финальным экраном
+                # Фиксируем, что это победа (на всякий случай)
+                self._game_won = True
             else:
                 # При попадании игрок ходит снова
                 self.player_turn = True
@@ -1118,7 +1120,7 @@ class GameView(BaseView):
         if self.game_over:
             self.victory_delay -= delta_time
             if self.victory_delay <= 0:
-                self._finish_game(won=True)
+                self._finish_game(won=getattr(self, "_game_won", True))
             return
 
         if not self.player_turn and not self.game_over:
@@ -1148,6 +1150,8 @@ class GameView(BaseView):
                 self.message = "Все ваши корабли уничтожены!"
                 self.game_over = True
                 self.victory_delay = 2.0  # Задержка 2 секунды
+                # Важно: фиксируем, что это поражение (для корректного экрана)
+                self._game_won = False
             else:
                 # При попадании ИИ ходит снова (с задержкой)
                 self.ai_delay = 1.0  # Пауза 1 секунда между выстрелами ИИ
