@@ -974,7 +974,6 @@ class GameView(BaseView):
 
         # Генерируем флот для ИИ
         if not generate_compact_fleet(self.enemy_board):
-            # Если не удалось компактно разместить, используем случайное размещение
             self._random_place_fleet(self.enemy_board)
 
         # Игровые переменные
@@ -998,6 +997,10 @@ class GameView(BaseView):
         # Тексты
         self.texts = []
 
+        # --- ЭФФЕКТЫ ВСПЛЕСКОВ ---
+        self.splashes = []
+        self.SPLASH_DURATION = 0.6  # Чуть увеличил длительность для красоты
+
     def _random_place_fleet(self, board: Board):
         """Случайное размещение флота."""
         for length in FLEET:
@@ -1012,7 +1015,6 @@ class GameView(BaseView):
                     board.place_ship(ship)
                     placed = True
                     break
-
             if not placed:
                 raise RuntimeError("Не удалось расставить корабли")
 
@@ -1021,13 +1023,11 @@ class GameView(BaseView):
         self._rebuild_text()
 
     def _rebuild_text(self):
-        # Чтобы текст не лежал на поле, привязываем его к SCREEN_HEIGHT
         self.texts = [
             arcade.Text("МОРСКОЙ БОЙ", SCREEN_WIDTH / 2, SCREEN_HEIGHT - 30,
                         arcade.color.GOLD, 20, bold=True,
                         anchor_x="center", anchor_y="center"),
 
-            # Подписи полей теперь учитывают высоту сетки
             arcade.Text("Ваше поле", PLAYER_GRID_ORIGIN[0],
                         PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 10,
                         C_TEXT, 12, bold=True),
@@ -1040,16 +1040,15 @@ class GameView(BaseView):
     def on_draw(self):
         self.clear()
 
-        # Верхняя панель (фон для текстов)
+        # Верхняя панель
         arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH,
                                           SCREEN_HEIGHT - 100, SCREEN_HEIGHT,
                                           (20, 30, 45))
 
-        # Тексты
         for text in self.texts:
             text.draw()
 
-        # Статус игры (поднимаем выше, чтобы не наезжало на поле)
+        # Статус игры
         turn_text = "Ваш ход" if self.player_turn else "Ход компьютера"
         status_text = f"Сложность: {self.difficulty} | {turn_text}"
         arcade.draw_text(status_text, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 60,
@@ -1066,7 +1065,6 @@ class GameView(BaseView):
         self._draw_grid_lines(ENEMY_GRID_ORIGIN)
 
     def _draw_board(self, origin: Tuple[int, int], board: Board, show_ships: bool):
-        """Отрисовывает игровое поле со спрайтами: слои по порядку."""
         ox, oy = origin
 
         # СЛОЙ 1: Фон клеток
@@ -1074,168 +1072,145 @@ class GameView(BaseView):
             for x in range(GRID_SIZE):
                 cx = ox + x * CELL_SIZE + CELL_SIZE / 2
                 cy = oy + y * CELL_SIZE + CELL_SIZE / 2
-                # Темная подложка клетки
                 draw_rect_filled(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2, (30, 40, 55))
 
-        # СЛОЙ 2: Корабли (свои или потопленные чужие)
+        # СЛОЙ 2: Корабли
         if show_ships:
             for ship in board.ships:
                 length = ship.length
-                if ship.horizontal:
-                    center_x = ox + (ship.x + length / 2) * CELL_SIZE
-                    center_y = oy + (ship.y + 0.5) * CELL_SIZE
-                else:
-                    center_x = ox + (ship.x + 0.5) * CELL_SIZE
-                    center_y = oy + (ship.y + length / 2) * CELL_SIZE
-
+                center_x = ox + (ship.x + (length / 2 if ship.horizontal else 0.5)) * CELL_SIZE
+                center_y = oy + (ship.y + (0.5 if ship.horizontal else length / 2)) * CELL_SIZE
                 self.sprites.draw_ship(center_x, center_y, length, ship.horizontal)
         else:
-            # Для поля врага рисуем только полностью потопленные корабли
             for ship in board.ships:
                 if ship.is_sunk:
                     length = ship.length
-                    if ship.horizontal:
-                        center_x = ox + (ship.x + length / 2) * CELL_SIZE
-                        center_y = oy + (ship.y + 0.5) * CELL_SIZE
-                    else:
-                        center_x = ox + (ship.x + 0.5) * CELL_SIZE
-                        center_y = oy + (ship.y + length / 2) * CELL_SIZE
-                    # Рисуем контур или полупрозрачный корабль
+                    center_x = ox + (ship.x + (length / 2 if ship.horizontal else 0.5)) * CELL_SIZE
+                    center_y = oy + (ship.y + (0.5 if ship.horizontal else length / 2)) * CELL_SIZE
                     self.sprites.draw_ship(center_x, center_y, length, ship.horizontal)
-                    # Дополнительно выделим красным, что он "всё"
                     draw_rect_outline(center_x, center_y,
                                       (length * CELL_SIZE if ship.horizontal else CELL_SIZE) - 2,
                                       (CELL_SIZE if ship.horizontal else length * CELL_SIZE) - 2,
                                       arcade.color.RED, 2)
 
-        # СЛОЙ 3: Эффекты (Промахи и Попадания) — ВСЕГДА ПОВЕРХ ВСЕГО
+        # СЛОЙ 3: Промахи и Попадания (статичные)
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
                 cx = ox + x * CELL_SIZE + CELL_SIZE / 2
                 cy = oy + y * CELL_SIZE + CELL_SIZE / 2
-
-                # Рисуем промах (синяя точка/крестик)
                 if (x, y) in board.misses:
                     self.sprites.draw_miss(cx, cy)
-
-                # Рисуем огонь/взрыв (рисуется поверх корабля)
                 if (x, y) in board.hits:
                     self.sprites.draw_fire(cx, cy)
 
+        # СЛОЙ 4: Всплески (анимированные)
+        for splash in self.splashes:
+            if splash['board'] == board:
+                cx = ox + splash['x'] * CELL_SIZE + CELL_SIZE / 2
+                cy = oy + splash['y'] * CELL_SIZE + CELL_SIZE / 2
+
+                progress = 1.0 - (splash['time'] / self.SPLASH_DURATION)
+                alpha = int(255 * (1.0 - progress))
+
+                # Выбор цвета: Красный для попадания, Синий для промаха
+                color = arcade.color.RED if splash['is_hit'] else arcade.color.CYAN
+
+                # Увеличенная дистанция (радиус до 1.5 размера клетки)
+                radius = progress * (CELL_SIZE * 1.5)
+
+                # Рисуем круги эффекта
+                arcade.draw_circle_outline(cx, cy, radius, (*color[:3], alpha), 2)
+                arcade.draw_circle_filled(cx, cy, 3, (*color[:3], alpha))
+
     def _draw_grid_lines(self, origin: Tuple[int, int]):
-        """Рисует линии сетки."""
         ox, oy = origin
-        w = CELL_SIZE * GRID_SIZE
-        h = CELL_SIZE * GRID_SIZE
-
+        w = h = CELL_SIZE * GRID_SIZE
         for i in range(GRID_SIZE + 1):
-            x = ox + i * CELL_SIZE
-            arcade.draw_line(x, oy, x, oy + h, C_GRID, 1)
-
-        for j in range(GRID_SIZE + 1):
-            y = oy + j * CELL_SIZE
-            arcade.draw_line(ox, y, ox + w, y, C_GRID, 1)
+            arcade.draw_line(ox + i * CELL_SIZE, oy, ox + i * CELL_SIZE, oy + h, C_GRID, 1)
+            arcade.draw_line(ox, oy + i * CELL_SIZE, ox + w, oy + i * CELL_SIZE, C_GRID, 1)
 
     def _screen_to_grid(self, x: float, y: float, origin: Tuple[int, int]) -> Optional[Tuple[int, int]]:
-        """Преобразует экранные координаты в координаты клетки."""
         ox, oy = origin
-        gx = int((x - ox) // CELL_SIZE)
-        gy = int((y - oy) // CELL_SIZE)
-
-        if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
-            return gx, gy
-        return None
+        gx, gy = int((x - ox) // CELL_SIZE), int((y - oy) // CELL_SIZE)
+        return (gx, gy) if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE else None
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
-        """Обработка выстрела игрока."""
         if self.game_over or not self.player_turn or button != arcade.MOUSE_BUTTON_LEFT:
             return
 
         grid_pos = self._screen_to_grid(x, y, ENEMY_GRID_ORIGIN)
-        if not grid_pos:
-            return
+        if not grid_pos: return
 
         gx, gy = grid_pos
-        shot_time = time.time()
-
-        # Обрабатываем выстрел
         result = self.enemy_board.shoot(gx, gy)
-
-        if result.already_shot:
-            self.message = "Сюда уже стреляли!"
-            return
+        if result.already_shot: return
 
         self.shots_total += 1
-        self.last_player_shot_time = shot_time
-
         if result.hit:
             self.hits += 1
             self.message = "Попадание!"
-            self.ship_playback = arcade.play_sound(self.Popal_SOUND)
+            arcade.play_sound(self.Popal_SOUND)
+            # Красный всплеск (is_hit=True)
+            self.splashes.append({'x': gx, 'y': gy, 'board': self.enemy_board,
+                                  'time': self.SPLASH_DURATION, 'is_hit': True})
 
             if result.sunk_ship:
                 self.message = f"Корабль потоплен! ({result.sunk_ship.length}-палубный)"
-
-            # Проверяем победу
             if self.enemy_board.all_ships_destroyed():
-                self.message = "Все корабли противника уничтожены!"
                 self.game_over = True
-                self.victory_delay = 2.0  # Задержка 2 секунды перед финальным экраном
-                # Фиксируем, что это победа (на всякий случай)
+                self.victory_delay = 2.0
                 self._game_won = True
-            else:
-                # При попадании игрок ходит снова
-                self.player_turn = True
         else:
             self.misses += 1
             self.message = "Промах!"
-            self.ship_playback = arcade.play_sound(self.Miss_SOUND)
+            arcade.play_sound(self.Miss_SOUND)
+            # Синий всплеск (is_hit=False)
+            self.splashes.append({'x': gx, 'y': gy, 'board': self.enemy_board,
+                                  'time': self.SPLASH_DURATION, 'is_hit': False})
             self.player_turn = False
             self.ai_delay = 1.5
 
     def on_update(self, delta_time: float):
-        """Обновление игровой логики."""
+        for splash in self.splashes[:]:
+            splash['time'] -= delta_time
+            if splash['time'] <= 0:
+                self.splashes.remove(splash)
+
         if self.game_over:
             self.victory_delay -= delta_time
             if self.victory_delay <= 0:
                 self._finish_game(won=getattr(self, "_game_won", True))
             return
 
-        if not self.player_turn and not self.game_over:
+        if not self.player_turn:
             if self.ai_delay > 0:
                 self.ai_delay -= delta_time
             else:
                 self._ai_turn()
 
     def _ai_turn(self):
-        """Ход компьютера."""
-        # Получаем координаты для выстрела
         x, y = self.ai.next_shot(self.player_board.hits, self.player_board.misses, self.player_board)
-
-        # Выстрел
         result = self.player_board.shoot(x, y)
 
         if result.hit:
             self.message = "Компьютер попал!"
-            self.ship_playback = arcade.play_sound(self.Popal_SOUND)
-
-            if result.sunk_ship:
-                self.message = f"Компьютер потопил ваш {result.sunk_ship.length}-палубный корабль!"
-                self.ai.reset_hunting()  # Сбрасываем режим охоты после потопления
-
-            # Проверяем поражение
+            arcade.play_sound(self.Popal_SOUND)
+            # Красный всплеск для ИИ
+            self.splashes.append({'x': x, 'y': y, 'board': self.player_board,
+                                  'time': self.SPLASH_DURATION, 'is_hit': True})
+            if result.sunk_ship: self.ai.reset_hunting()
             if self.player_board.all_ships_destroyed():
-                self.message = "Все ваши корабли уничтожены!"
                 self.game_over = True
-                self.victory_delay = 2.0  # Задержка 2 секунды
-                # Важно: фиксируем, что это поражение (для корректного экрана)
+                self.victory_delay = 2.0
                 self._game_won = False
             else:
-                # При попадании ИИ ходит снова (с задержкой)
-                self.ai_delay = 1.0  # Пауза 1 секунда между выстрелами ИИ
+                self.ai_delay = 1.0
         else:
             self.message = "Компьютер промахнулся. Ваш ход."
-            self.ship_playback = arcade.play_sound(self.Miss_SOUND)
+            arcade.play_sound(self.Miss_SOUND)
+            # Синий всплеск для ИИ
+            self.splashes.append({'x': x, 'y': y, 'board': self.player_board,
+                                  'time': self.SPLASH_DURATION, 'is_hit': False})
             self.player_turn = True
 
     def _finish_game(self, won: bool):
