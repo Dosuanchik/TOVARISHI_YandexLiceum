@@ -61,6 +61,17 @@ C_DRAG_SHIPS = arcade.color.LIGHT_GRAY
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "stats.sqlite3"
 
+
+def resource_path(relative_path: str) -> str:
+    """Возвращает путь к ресурсу и для обычного запуска, и для PyInstaller onefile.
+
+    PyInstaller распаковывает данные во временную папку, доступную через sys._MEIPASS.
+    """
+    import sys
+
+    base_path = getattr(sys, "_MEIPASS", str(BASE_DIR))
+    return str(Path(base_path) / relative_path)
+
 # Стандартный набор кораблей: 1x4, 2x3, 3x2, 4x1
 FLEET = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1]
 
@@ -986,9 +997,9 @@ class GameView(BaseView):
         self.game_over = False
         self.victory_delay = 0
 
-        # Звуки
-        self.Miss_SOUND = arcade.load_sound("sounds/Miss.mp3")
-        self.Popal_SOUND = arcade.load_sound("sounds/PopalNew.mp3")
+        # Звуки (поддержка PyInstaller onefile)
+        self.Miss_SOUND = arcade.load_sound(resource_path("sounds/Miss.mp3"))
+        self.Popal_SOUND = arcade.load_sound(resource_path("sounds/PopalNew.mp3"))
 
         # Статистика
         self.shots_total = 0
