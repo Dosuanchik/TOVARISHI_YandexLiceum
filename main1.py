@@ -332,22 +332,24 @@ class ComputerAI:
 
     def __init__(self, difficulty: str):
         self.difficulty = difficulty
-        self.last_shot_time = 0
-        self.hunting_mode = False
-        self.target_stack = []
-        self.last_hit = None
-        self.direction = None
-        self.tried_directions = set()
+
+        # Для "среднего" уровня: добивание корабля по попаданиям.
+        # Храним только попадания по текущей (ещё не потопленной) цели.
+        self._target_hits: Set[Tuple[int, int]] = set()
 
     def next_shot(self, known_hits: Set[Tuple[int, int]],
-                  known_misses: Set[Tuple[int, int]]) -> Tuple[int, int]:
+                  known_misses: Set[Tuple[int, int]],
+                  player_board: Optional[Board] = None) -> Tuple[int, int]:
         """Определяет следующий выстрел."""
         shot_set = known_hits | known_misses
 
-        if self.difficulty == "medium" and known_hits:
-            return self._hunting_shot(shot_set)
+        if self.difficulty == "hard" and player_board is not None:
+            return self._hard_shot(player_board=player_board, shot_set=shot_set)
 
-        # Легкий уровень или нет попаданий
+        if self.difficulty == "medium":
+            return self._medium_shot(known_hits=known_hits, shot_set=shot_set)
+
+        # Легкий уровень
         return self._random_shot(shot_set)
 
     def _random_shot(self, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
@@ -363,42 +365,97 @@ class ComputerAI:
 
         return random.choice(candidates)
 
-    def _hunting_shot(self, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
-        """Режим охоты - добивание поврежденного корабля."""
-        # Если есть цель в стеке, стреляем по ней
-        while self.target_stack:
-            target = self.target_stack.pop()
-            if target not in shot_set:
-                return target
+    def _medium_shot(self, *, known_hits: Set[Tuple[int, int]], shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
+        """Средний уровень: если есть поврежденный корабль — добиваем его, иначе стреляем случайно."""
+        self._sync_target_hits(known_hits)
 
-        # Ищем последнее попадание
-        recent_hits = list(shot_set)
-        if not recent_hits:
+        # Нет цели — обычная стрельба
+        if not self._target_hits:
             return self._random_shot(shot_set)
 
-        last_hit = recent_hits[-1]
+        target = self._pick_finish_cell(shot_set)
+        if target is not None:
+            return target
 
-        # Добавляем соседей для добивания
-        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-        random.shuffle(directions)
-
-        for dx, dy in directions:
-            x, y = last_hit[0] + dx, last_hit[1] + dy
-            if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE and (x, y) not in shot_set:
-                self.target_stack.append((x, y))
-
-        if self.target_stack:
-            return self.target_stack.pop()
-
+        # На всякий случай (если вокруг всё прострелено)
         return self._random_shot(shot_set)
 
+    def _hard_shot(self, *, player_board: Board, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
+        """Сложный уровень: "подглядывает" за расстановкой игрока и бьёт точно по кораблям.
+
+        Выбирает любую ещё не прострелянную клетку, где действительно есть корабль.
+        Если все клетки кораблей уже прострелены (крайний случай), падает в случайный выстрел.
+        """
+        candidates = [cell for cell in player_board.ship_cells if cell not in shot_set]
+        if candidates:
+            return random.choice(candidates)
+        return self._random_shot(shot_set)
+
+    def _sync_target_hits(self, known_hits: Set[Tuple[int, int]]):
+        """Поддерживает множество попаданий по текущей цели.
+
+        Важно: известные попадания по уже потопленным кораблям остают��я в known_hits,
+        поэтому потопление сигнализируется снаружи вызовом reset_hunting() (в GameView).
+        """
+        new_hits = known_hits - self._target_hits
+        if new_hits:
+            self._target_hits.update(new_hits)
+
+    def _pick_finish_cell(self, shot_set: Set[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+        """Выбирает следующую клетку для добивания по текущим попаданиям."""
+        hits = list(self._target_hits)
+
+        # 1 попадание — стреляем в одного из 4 соседей
+        if len(hits) == 1:
+            x, y = hits[0]
+            neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+            candidates = [(nx, ny) for nx, ny in neighbors
+                          if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and (nx, ny) not in shot_set]
+            return random.choice(candidates) if candidates else None
+
+        # 2+ попаданий — определяем ориентацию и добиваем по концам
+        xs = {x for x, _ in hits}
+        ys = {y for _, y in hits}
+
+        # Горизонтальный корабль (все y одинаковые)
+        if len(ys) == 1:
+            y = next(iter(ys))
+            min_x = min(x for x, _ in hits)
+            max_x = max(x for x, _ in hits)
+            candidates = []
+            left = (min_x - 1, y)
+            right = (max_x + 1, y)
+            if 0 <= left[0] < GRID_SIZE and left not in shot_set:
+                candidates.append(left)
+            if 0 <= right[0] < GRID_SIZE and right not in shot_set:
+                candidates.append(right)
+            return random.choice(candidates) if candidates else None
+
+        # Вертикальный корабль (все x одинаковые)
+        if len(xs) == 1:
+            x = next(iter(xs))
+            min_y = min(y for _, y in hits)
+            max_y = max(y for _, y in hits)
+            candidates = []
+            down = (x, min_y - 1)
+            up = (x, max_y + 1)
+            if 0 <= down[1] < GRID_SIZE and down not in shot_set:
+                candidates.append(down)
+            if 0 <= up[1] < GRID_SIZE and up not in shot_set:
+                candidates.append(up)
+            return random.choice(candidates) if candidates else None
+
+        # Нестандартный случай (например, попадания по разным кораблям) — добиваем по соседям
+        for x, y in hits:
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and (nx, ny) not in shot_set:
+                    return (nx, ny)
+
+        return None
+
     def reset_hunting(self):
-        """Сбрасывает режим охоты."""
-        self.hunting_mode = False
-        self.target_stack = []
-        self.last_hit = None
-        self.direction = None
-        self.tried_directions = set()
+        """Сбрасывает добивание после потопления корабля."""
+        self._target_hits.clear()
 
 
 # ----------------------------
@@ -515,16 +572,19 @@ class MenuView(BaseView):
                         arcade.color.GOLD, 32, bold=True,
                         anchor_x="center", anchor_y="center"),
             arcade.Text("Нажмите 1 — Новая игра (Лёгкий)", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT / 2 + 40, C_TEXT, 18,
+                        SCREEN_HEIGHT / 2 + 50, C_TEXT, 18,
                         anchor_x="center", anchor_y="center"),
             arcade.Text("Нажмите 2 — Новая игра (Средний)", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT / 2 + 10, C_TEXT, 18,
+                        SCREEN_HEIGHT / 2 + 20, C_TEXT, 18,
+                        anchor_x="center", anchor_y="center"),
+            arcade.Text("Нажмите 3 — Новая игра (Сложный)", SCREEN_WIDTH / 2,
+                        SCREEN_HEIGHT / 2 - 10, C_TEXT, 18,
                         anchor_x="center", anchor_y="center"),
             arcade.Text("Нажмите S — Статистика", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT / 2 - 20, C_TEXT, 18,
+                        SCREEN_HEIGHT / 2 - 40, C_TEXT, 18,
                         anchor_x="center", anchor_y="center"),
             arcade.Text("Нажмите Esc — Выход", SCREEN_WIDTH / 2,
-                        SCREEN_HEIGHT / 2 - 50, C_TEXT, 18,
+                        SCREEN_HEIGHT / 2 - 70, C_TEXT, 18,
                         anchor_x="center", anchor_y="center"),
         ]
 
@@ -538,6 +598,8 @@ class MenuView(BaseView):
             self.window.show_view(ShipPlacementView(difficulty="easy"))
         elif symbol == arcade.key.KEY_2:
             self.window.show_view(ShipPlacementView(difficulty="medium"))
+        elif symbol == arcade.key.KEY_3:
+            self.window.show_view(ShipPlacementView(difficulty="hard"))
         elif symbol == arcade.key.S:
             self.window.show_view(StatsView())
         elif symbol == arcade.key.ESCAPE:
@@ -1132,7 +1194,7 @@ class GameView(BaseView):
     def _ai_turn(self):
         """Ход компьютера."""
         # Получаем координаты для выстрела
-        x, y = self.ai.next_shot(self.player_board.hits, self.player_board.misses)
+        x, y = self.ai.next_shot(self.player_board.hits, self.player_board.misses, self.player_board)
 
         # Выстрел
         result = self.player_board.shoot(x, y)
