@@ -381,14 +381,30 @@ class ComputerAI:
         return self._random_shot(shot_set)
 
     def _hard_shot(self, *, player_board: Board, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
-        """Сложный уровень: "подглядывает" за расстановкой игрока и бьёт точно по кораблям.
+        """Сложный уровень: "подглядывает" за расстановкой игрока, но играет честнее.
 
-        Выбирает любую ещё не прострелянную клетку, где действительно есть корабль.
-        Если все клетки кораблей уже прострелены (крайний случай), падает в случайный выстрел.
+        Правила:
+        - Если есть незавершённая цель (есть попадания по текущему кораблю) — добиваем её как на medium.
+        - Иначе с вероятностью HARD_CHEAT_PROB выбираем клетку с кораблём (точный выстрел).
+        - Иначе делаем обычный случайный выстрел.
+
+        Так ИИ остаётся "сложным", но не выигрывает мгновенно.
         """
-        candidates = [cell for cell in player_board.ship_cells if cell not in shot_set]
-        if candidates:
-            return random.choice(candidates)
+        HARD_CHEAT_PROB = 0.35
+
+        # Если уже есть попадания по текущей цели — используем логику добивания
+        if self._target_hits:
+            target = self._pick_finish_cell(shot_set)
+            if target is not None:
+                return target
+
+        # Иногда "подглядываем" и делаем точный выстрел
+        if random.random() < HARD_CHEAT_PROB:
+            candidates = [cell for cell in player_board.ship_cells if cell not in shot_set]
+            if candidates:
+                return random.choice(candidates)
+
+        # Иначе играем как обычный (случайный) игрок
         return self._random_shot(shot_set)
 
     def _sync_target_hits(self, known_hits: Set[Tuple[int, int]]):
