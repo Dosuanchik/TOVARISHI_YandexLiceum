@@ -72,6 +72,7 @@ def resource_path(relative_path: str) -> str:
     base_path = getattr(sys, "_MEIPASS", str(BASE_DIR))
     return str(Path(base_path) / relative_path)
 
+
 # Стандартный набор кораблей: 1x4, 2x3, 3x2, 4x1
 FLEET = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1]
 
@@ -339,14 +340,17 @@ def generate_compact_fleet(board: Board, seed: Optional[int] = None) -> bool:
 
 
 class ComputerAI:
-    """Улучшенный ИИ для компьютера."""
+    """Улучшенный ИИ для компьютера с нормальной логикой добивания."""
 
     def __init__(self, difficulty: str):
         self.difficulty = difficulty
 
-        # Для "среднего" уровня: добивание корабля по попаданиям.
-        # Храним только попадания по текущей (ещё не потопленной) цели.
-        self._target_hits: Set[Tuple[int, int]] = set()
+        # Для охоты за кораблями
+        self._target_mode = False  # Режим "добивания"
+        self._target_hits = []  # Попадания по текущему цели
+        self._target_direction = None  # Направление корабля (None, 'horizontal', 'vertical')
+        self._last_hit = None  # Последнее попадание
+        self._possible_targets = []  # Возможные цели для выстрела
 
     def next_shot(self, known_hits: Set[Tuple[int, int]],
                   known_misses: Set[Tuple[int, int]],
@@ -358,9 +362,9 @@ class ComputerAI:
             return self._hard_shot(player_board=player_board, shot_set=shot_set)
 
         if self.difficulty == "medium":
-            return self._medium_shot(known_hits=known_hits, shot_set=shot_set)
+            return self._medium_shot(shot_set=shot_set, known_hits=known_hits)
 
-        # Легкий уровень
+        # Легкий уровень - полностью случайный
         return self._random_shot(shot_set)
 
     def _random_shot(self, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
@@ -376,113 +380,184 @@ class ComputerAI:
 
         return random.choice(candidates)
 
-    def _medium_shot(self, *, known_hits: Set[Tuple[int, int]], shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
-        """Средний уровень: если есть поврежденный корабль — добиваем его, иначе стреляем случайно."""
-        self._sync_target_hits(known_hits)
+    def _medium_shot(self, *, shot_set: Set[Tuple[int, int]], known_hits: Set[Tuple[int, int]]) -> Tuple[int, int]:
+        """Средний уровень с нормальной логикой добивания."""
 
-        # Нет цели — обычная стрельба
-        if not self._target_hits:
-            return self._random_shot(shot_set)
+        # Если не в режиме добивания - ищем новую цель
+        if not self._target_mode:
+            # Проверяем, есть ли непотопленные попадания
+            fresh_hits = [h for h in known_hits if h not in self._target_hits]
 
-        target = self._pick_finish_cell(shot_set)
-        if target is not None:
+            if fresh_hits:
+                # Начинаем охоту за новым кораблем
+                self._target_mode = True
+                self._target_hits = [random.choice(fresh_hits)]
+                self._target_direction = None
+                self._last_hit = self._target_hits[0]
+                self._possible_targets = self._get_adjacent_cells(self._last_hit, shot_set)
+
+            # Если нет целей - случайный выстрел
+            if not self._target_mode:
+                return self._random_shot(shot_set)
+
+        # Режим добивания
+        if self._possible_targets:
+            # Берем следующую возможную цель
+            target = self._possible_targets.pop(0)
             return target
 
-        # На всякий случай (если вокруг всё прострелено)
+        # Если возможных целей нет, но мы в режиме добивания - выходим из него
+        self._exit_hunting_mode()
         return self._random_shot(shot_set)
 
     def _hard_shot(self, *, player_board: Board, shot_set: Set[Tuple[int, int]]) -> Tuple[int, int]:
-        """Сложный уровень: "подглядывает" за расстановкой игрока, но играет честнее.
-
-        Правила:
-        - Если есть незавершённая цель (есть попадания по текущему кораблю) — добиваем её как на medium.
-        - Иначе с вероятностью HARD_CHEAT_PROB выбираем клетку с кораблём (точный выстрел).
-        - Иначе делаем обычный случайный выстрел.
-
-        Так ИИ остаётся "сложным", но не выигрывает мгновенно.
-        """
+        """Сложный уровень с подглядыванием и нормальной логикой."""
         HARD_CHEAT_PROB = 0.35
 
-        # Если уже есть попадания по текущей цели — используем логику добивания
-        if self._target_hits:
-            target = self._pick_finish_cell(shot_set)
-            if target is not None:
-                return target
+        # Пытаемся использовать информацию о расположении кораблей
+        if random.random() < HARD_CHEAT_PROB and not self._target_mode:
+            # Ищем клетки с непотопленными кораблями
+            candidates = []
+            for x in range(GRID_SIZE):
+                for y in range(GRID_SIZE):
+                    if (x, y) in shot_set:
+                        continue
+                    # Проверяем, есть ли здесь корабль
+                    ship = player_board.get_ship_at(x, y)
+                    if ship and not ship.is_sunk:
+                        candidates.append((x, y))
 
-        # Иногда "подглядываем" и делаем точный выстрел
-        if random.random() < HARD_CHEAT_PROB:
-            candidates = [cell for cell in player_board.ship_cells if cell not in shot_set]
             if candidates:
-                return random.choice(candidates)
+                # Выбираем наиболее перспективную клетку (рядом с уже попаданиями)
+                best_target = None
+                best_score = -1
 
-        # Иначе играем как обычный (случайный) игрок
-        return self._random_shot(shot_set)
+                for candidate in candidates:
+                    score = 0
+                    # Начисляем очки за соседство с непотопленными кораблями
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nx, ny = candidate[0] + dx, candidate[1] + dy
+                        if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+                            neighbor_ship = player_board.get_ship_at(nx, ny)
+                            if neighbor_ship and not neighbor_ship.is_sunk:
+                                score += 1
 
-    def _sync_target_hits(self, known_hits: Set[Tuple[int, int]]):
-        """Поддерживает множество попаданий по текущей цели.
+                    if score > best_score:
+                        best_score = score
+                        best_target = candidate
 
-        Важно: известные попадания по уже потопленным кораблям остают��я в known_hits,
-        поэтому потопление сигнализируется снаружи вызовом reset_hunting() (в GameView).
-        """
-        new_hits = known_hits - self._target_hits
-        if new_hits:
-            self._target_hits.update(new_hits)
+                if best_target:
+                    return best_target
 
-    def _pick_finish_cell(self, shot_set: Set[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
-        """Выбирает следующую клетку для добивания по текущим попаданиям."""
-        hits = list(self._target_hits)
+        # Если не сработал чит или в режиме добивания - используем логику среднего уровня
+        return self._medium_shot(shot_set=shot_set, known_hits=player_board.hits)
 
-        # 1 попадание — стреляем в одного из 4 соседей
-        if len(hits) == 1:
-            x, y = hits[0]
-            neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
-            candidates = [(nx, ny) for nx, ny in neighbors
-                          if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and (nx, ny) not in shot_set]
-            return random.choice(candidates) if candidates else None
+    def _get_adjacent_cells(self, cell: Tuple[int, int], shot_set: Set[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Возвращает соседние клетки для выстрела (только по горизонтали/вертикали)."""
+        x, y = cell
+        adjacent = []
 
-        # 2+ попаданий — определяем ориентацию и добиваем по концам
-        xs = {x for x, _ in hits}
-        ys = {y for _, y in hits}
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE:
+                if (nx, ny) not in shot_set:
+                    adjacent.append((nx, ny))
 
-        # Горизонтальный корабль (все y одинаковые)
-        if len(ys) == 1:
-            y = next(iter(ys))
-            min_x = min(x for x, _ in hits)
-            max_x = max(x for x, _ in hits)
-            candidates = []
-            left = (min_x - 1, y)
-            right = (max_x + 1, y)
-            if 0 <= left[0] < GRID_SIZE and left not in shot_set:
-                candidates.append(left)
-            if 0 <= right[0] < GRID_SIZE and right not in shot_set:
-                candidates.append(right)
-            return random.choice(candidates) if candidates else None
+        # Перемешиваем, чтобы не было предсказуемости
+        random.shuffle(adjacent)
+        return adjacent
 
-        # Вертикальный корабль (все x одинаковые)
-        if len(xs) == 1:
-            x = next(iter(xs))
-            min_y = min(y for _, y in hits)
-            max_y = max(y for _, y in hits)
-            candidates = []
-            down = (x, min_y - 1)
-            up = (x, max_y + 1)
-            if 0 <= down[1] < GRID_SIZE and down not in shot_set:
-                candidates.append(down)
-            if 0 <= up[1] < GRID_SIZE and up not in shot_set:
-                candidates.append(up)
-            return random.choice(candidates) if candidates else None
+    def _update_hunting_mode(self, hit: bool, shot_coords: Tuple[int, int]):
+        """Обновляет состояние режима добивания после выстрела."""
+        if not self._target_mode:
+            return
 
-        # Нестандартный случай (например, попадания по разным кораблям) — добиваем по соседям
-        for x, y in hits:
-            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-                if 0 <= nx < GRID_SIZE and 0 <= ny < GRID_SIZE and (nx, ny) not in shot_set:
-                    return (nx, ny)
+        if hit:
+            # Добавляем попадание
+            self._target_hits.append(shot_coords)
+            self._last_hit = shot_coords
 
-        return None
+            # Определяем направление, если у нас 2+ попадания
+            if len(self._target_hits) >= 2:
+                self._determine_direction()
+
+            # Обновляем возможные цели
+            self._update_possible_targets()
+        else:
+            # Промах - просто удаляем эту цель из списка возможных
+            if shot_coords in self._possible_targets:
+                self._possible_targets.remove(shot_coords)
+
+    def _determine_direction(self):
+        """Определяет направление корабля на основе попаданий."""
+        if len(self._target_hits) < 2:
+            return
+
+        # Сортируем попадания
+        sorted_hits = sorted(self._target_hits)
+
+        # Проверяем, все ли на одной линии
+        xs = [h[0] for h in sorted_hits]
+        ys = [h[1] for h in sorted_hits]
+
+        if len(set(xs)) == 1:
+            self._target_direction = 'vertical'
+        elif len(set(ys)) == 1:
+            self._target_direction = 'horizontal'
+        # Если направления нет (L-образный корабль невозможен в морском бое),
+        # значит мы попали в два разных корабля - оставляем direction = None
+
+    def _update_possible_targets(self):
+        """Обновляет список возможных целей на основе текущих попаданий и направления."""
+        self._possible_targets = []
+
+        if not self._target_hits:
+            return
+
+        if self._target_direction is None:
+            # Если направления нет - стреляем во все соседние клетки от всех попаданий
+            for hit in self._target_hits:
+                self._possible_targets.extend(self._get_adjacent_cells(hit, set()))
+        else:
+            # Если направление известно - стреляем только вдоль него
+            if self._target_direction == 'horizontal':
+                # Находим крайние точки
+                min_x = min(h[0] for h in self._target_hits)
+                max_x = max(h[0] for h in self._target_hits)
+                y = self._target_hits[0][1]  # Все y одинаковы
+
+                # Целимся в продолжение слева и справа
+                if min_x > 0:
+                    self._possible_targets.append((min_x - 1, y))
+                if max_x < GRID_SIZE - 1:
+                    self._possible_targets.append((max_x + 1, y))
+
+            elif self._target_direction == 'vertical':
+                # Находим крайние точки
+                min_y = min(h[1] for h in self._target_hits)
+                max_y = max(h[1] for h in self._target_hits)
+                x = self._target_hits[0][0]  # Все x одинаковы
+
+                # Целимся в продолжение сверху и снизу
+                if min_y > 0:
+                    self._possible_targets.append((x, min_y - 1))
+                if max_y < GRID_SIZE - 1:
+                    self._possible_targets.append((x, max_y + 1))
+
+        # Убираем дубликаты
+        self._possible_targets = list(dict.fromkeys(self._possible_targets))
+
+    def _exit_hunting_mode(self):
+        """Выходит из режима добивания."""
+        self._target_mode = False
+        self._target_hits = []
+        self._target_direction = None
+        self._last_hit = None
+        self._possible_targets = []
 
     def reset_hunting(self):
-        """Сбрасывает добивание после потопления корабля."""
-        self._target_hits.clear()
+        """Сбрасывает охоту после потопления корабля."""
+        self._exit_hunting_mode()
 
 
 # ----------------------------
@@ -490,7 +565,7 @@ class ComputerAI:
 # ----------------------------
 
 """
-Для добавления спрайтов выполните следующие шаги:
+Для добавления спрайтов выполни следующие шаги: НЕ РЕАЛИЗОВАНО ДЛЯ СОХРАНИЕНИЯ СТЛИЛЯ И ТЕМАТИКИ ИГРЫ!
 
 1. Создайте папку 'images' в той же директории, что и main.py
 
@@ -529,7 +604,7 @@ class GameSprites:
             3: arcade.Sprite("images/ship_large.png", scale=0.8),
             4: arcade.Sprite("images/ship_huge.png", scale=0.8),
         }
-        
+
         # Загрузка спрайтов эффектов
         self.effect_sprites = {
             'fire': arcade.Sprite("images/fire.png", scale=0.7),
@@ -714,9 +789,6 @@ class ShipPlacementView(BaseView):
     def _rebuild_text(self):
         right_margin = SCREEN_WIDTH - 30
         left_margin = 20
-        # Вычисляем dock_left здесь один раз, чтобы использовать в подписях
-        dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 200
-
         self.texts = [
             arcade.Text("R: Поворот | Backspace: Сброс | Enter: Старт",
                         right_margin, SCREEN_HEIGHT - 30, arcade.color.ASH_GREY, 10,
@@ -745,7 +817,6 @@ class ShipPlacementView(BaseView):
                         PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 270,
                         PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 25,
                         arcade.color.WHITE, 12, bold=True, anchor_x="left"),
-
         ]
 
     def on_draw(self):
@@ -754,7 +825,7 @@ class ShipPlacementView(BaseView):
         # Общая верхняя панель
         arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH, SCREEN_HEIGHT - 100, SCREEN_HEIGHT, (20, 30, 45))
 
-        # 1. СИНХРОНИЗИРОВАННЫЙ РАСЧЕТ ДОКА
+        # Док для кораблей
         dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 200
         dock_right = dock_left + 300
         dock_bottom = PLAYER_GRID_ORIGIN[1] - 20
@@ -763,16 +834,17 @@ class ShipPlacementView(BaseView):
         arcade.draw_lrbt_rectangle_filled(dock_left, dock_right, dock_bottom, dock_top, (20, 30, 45))
         arcade.draw_lrbt_rectangle_outline(dock_left, dock_right, dock_bottom, dock_top, (60, 70, 90), 2)
 
-        # 2. ПОЛЕ
+        # Поле игрока
         self._draw_board(PLAYER_GRID_ORIGIN, self.board, show_ships=True)
         self._draw_grid_lines(PLAYER_GRID_ORIGIN)
 
-        # 3. КОРАБЛИ (СИНХРОНИЗИРОВАНО)
+        # Доступные корабли
         start_x = dock_left + 75
         start_y = dock_top - 60
 
         for i, ship_info in enumerate(self.available_ships):
-            if ship_info['placed']: continue
+            if ship_info['placed']:
+                continue
             col, row = i % 2, i // 2
             current_x = start_x + (col * 140)
             current_y = start_y - (row * 75)
@@ -783,10 +855,14 @@ class ShipPlacementView(BaseView):
                 arcade.draw_text(f"{ship_info['length']}-палубный", current_x, current_y - 25,
                                  arcade.color.ASH_GREY, 9, anchor_x="center")
 
+        # Рисуем перетаскиваемый корабль
         if self.dragging_ship:
             self.sprites.draw_ship(self.dragging_ship['drag_x'], self.dragging_ship['drag_y'],
                                    self.dragging_ship['length'], self.dragging_ship['horizontal'])
-        for t in self.texts: t.draw()
+
+        # Рисуем тексты
+        for t in self.texts:
+            t.draw()
 
     def _draw_board(self, origin: Tuple[int, int], board: Board, show_ships: bool):
         """Отрисовывает поле."""
@@ -797,12 +873,9 @@ class ShipPlacementView(BaseView):
             for x in range(GRID_SIZE):
                 cx = ox + x * CELL_SIZE + CELL_SIZE / 2
                 cy = oy + y * CELL_SIZE + CELL_SIZE / 2
-
                 color = (30, 40, 55)
                 if show_ships and (x, y) in board.ship_cells:
                     color = C_SHIP
-
-                # Используем функцию из примеров
                 draw_rect_filled(cx, cy, CELL_SIZE - 2, CELL_SIZE - 2, color)
 
     def _draw_grid_lines(self, origin: Tuple[int, int]):
@@ -830,49 +903,91 @@ class ShipPlacementView(BaseView):
         return None
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
-        if button != arcade.MOUSE_BUTTON_LEFT: return
+        """Обработка нажатия мыши."""
+        if button != arcade.MOUSE_BUTTON_LEFT:
+            return
 
         if not self.dragging_ship:
-            # ИСПРАВЛЕННЫЙ РАСЧЕТ: Теперь точно такой же, как в on_draw (+200)
+            # Пытаемся взять корабль из дока
             dock_left = PLAYER_GRID_ORIGIN[0] + (GRID_SIZE * CELL_SIZE) + 200
             dock_top = PLAYER_GRID_ORIGIN[1] + (GRID_SIZE * CELL_SIZE) + 40
             start_x = dock_left + 75
             start_y = dock_top - 60
 
             for i, ship_info in enumerate(self.available_ships):
-                if ship_info['placed']: continue
+                if ship_info['placed']:
+                    continue
                 col, row = i % 2, i // 2
                 current_x = start_x + (col * 140)
-                current_y = start_y - (row * 75) + 5
+                current_y = start_y - (row * 75) + 5  # +5 для выравнивания
 
                 length = ship_info['length']
-                w, h = (length * CELL_SIZE, CELL_SIZE) if ship_info['horizontal'] else (CELL_SIZE, length * CELL_SIZE)
+                horizontal = ship_info['horizontal']
 
-                if (current_x - w / 2 <= x <= current_x + w / 2 and
-                        current_y - h / 2 <= y <= current_y + h / 2):
+                # Вычисляем границы корабля в доке
+                if horizontal:
+                    ship_width = length * CELL_SIZE - 4
+                    ship_height = CELL_SIZE - 4
+                else:
+                    ship_width = CELL_SIZE - 4
+                    ship_height = length * CELL_SIZE - 4
+
+                left = current_x - ship_width / 2
+                right = current_x + ship_width / 2
+                top = current_y + ship_height / 2
+                bottom = current_y - ship_height / 2
+
+                # Проверяем, попал ли клик в корабль
+                if left <= x <= right and bottom <= y <= top:
                     self.dragging_ship = ship_info
+                    # Сохраняем смещение курсора от центра корабля
                     self.drag_offset_x = x - current_x
                     self.drag_offset_y = y - current_y
                     ship_info['dragging'] = True
+                    ship_info['drag_x'] = x  # Начальная позиция = курсор
+                    ship_info['drag_y'] = y
                     return
 
-        # Установка (с фиксом смещения из предыдущего шага)
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
+        """Обработка движения мыши при перетаскивании."""
         if self.dragging_ship:
-            # Используем смещение, чтобы корабль вставал ровно под курсор
-            target_x = x - self.drag_offset_x
-            target_y = y - self.drag_offset_y
-            grid_pos = self._screen_to_grid(target_x, target_y, PLAYER_GRID_ORIGIN)
+            # Обновляем позицию корабля с учетом смещения
+            self.dragging_ship['drag_x'] = x - self.drag_offset_x
+            self.dragging_ship['drag_y'] = y - self.drag_offset_y
+
+    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
+        """Обработка отпускания мыши."""
+        if button == arcade.MOUSE_BUTTON_LEFT and self.dragging_ship:
+            # Пытаемся разместить корабль на поле
+            grid_pos = self._screen_to_grid(
+                self.dragging_ship['drag_x'],
+                self.dragging_ship['drag_y'],
+                PLAYER_GRID_ORIGIN
+            )
 
             if grid_pos:
                 gx, gy = grid_pos
-                ship = Ship(self.dragging_ship['length'], gx, gy, self.dragging_ship['horizontal'])
+                ship = Ship(
+                    self.dragging_ship['length'],
+                    gx,
+                    gy,
+                    self.dragging_ship['horizontal']
+                )
+
                 if self.board.can_place_ship(ship, self.board.ships):
                     self.board.place_ship(ship)
                     self.dragging_ship['placed'] = True
-                    if all(s['placed'] for s in self.available_ships):
-                        self.texts[2].text = "ГОТОВ К БОЮ! НАЖМИ ENTER"  # Индекс текста готовности
-                        self.texts[2].color = arcade.color.NEON_GREEN
 
+                    # Проверяем, все ли корабли расставлены
+                    if all(s['placed'] for s in self.available_ships):
+                        # Обновляем текст готовности
+                        for text in self.texts:
+                            if text.text == "РАССТАВЬТЕ ВСЕ КОРАБЛИ":
+                                text.text = "ГОТОВ К БОЮ! НАЖМИ ENTER"
+                                text.color = arcade.color.NEON_GREEN
+                                break
+
+            # Сбрасываем состояние перетаскивания
             self.dragging_ship['dragging'] = False
             self.dragging_ship = None
 
@@ -893,7 +1008,7 @@ class ShipPlacementView(BaseView):
                 length = ship_info['length']
                 horizontal = random.choice([True, False])
 
-                # Вычисляем максимальные координаты, чтобы корабль не вылез за границы
+                # Вычисляем максимальные координаты
                 max_x = GRID_SIZE - length if horizontal else GRID_SIZE - 1
                 max_y = GRID_SIZE - 1 if horizontal else GRID_SIZE - length
 
@@ -904,8 +1019,6 @@ class ShipPlacementView(BaseView):
 
                 if self.board.can_place_ship(new_ship, self.board.ships):
                     self.board.place_ship(new_ship)
-
-                    # Обновляем инфо для UI
                     ship_info['placed'] = True
                     ship_info['horizontal'] = horizontal
                     placed = True
@@ -916,22 +1029,19 @@ class ShipPlacementView(BaseView):
     def _check_ready_state(self):
         """Проверяет, все ли расставлено, и меняет цвет текста."""
         if all(s['placed'] for s in self.available_ships):
-            self.texts[2].text = "ГОТОВ К БОЮ! НАЖМИ ENTER"
-            self.texts[2].color = arcade.color.NEON_GREEN
+            # Находим и обновляем текст готовности
+            for text in self.texts:
+                if "РАССТАВЬТЕ ВСЕ КОРАБЛИ" in text.text:
+                    text.text = "ГОТОВ К БОЮ! НАЖМИ ENTER"
+                    text.color = arcade.color.NEON_GREEN
+                    break
         else:
-            self.texts[2].text = "РАССТАВЬТЕ ВСЕ КОРАБЛИ"
-            self.texts[2].color = arcade.color.DIM_GRAY
-
-    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
-        """Обработка движения мыши при перетаскивании."""
-        if self.dragging_ship:
-            self.dragging_ship['drag_x'] = x - self.drag_offset_x
-            self.dragging_ship['drag_y'] = y - self.drag_offset_y
-
-    def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
-        """Обработка отпускания мыши."""
-        if button == arcade.MOUSE_BUTTON_LEFT and self.dragging_ship:
-            self.on_mouse_press(x, y, button, modifiers)
+            # Возвращаем исходный текст
+            for text in self.texts:
+                if "ГОТОВ К БОЮ" in text.text:
+                    text.text = "РАССТАВЬТЕ ВСЕ КОРАБЛИ"
+                    text.color = arcade.color.DIM_GRAY
+                    break
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Обработка нажатия клавиш."""
@@ -940,7 +1050,7 @@ class ShipPlacementView(BaseView):
             self.dragging_ship['horizontal'] = not self.dragging_ship['horizontal']
 
         elif symbol == arcade.key.SPACE:
-            # Если что-то тащим — отменяем перетаскивание перед рандомом
+            # Быстрая расстановка
             if self.dragging_ship:
                 self.dragging_ship['dragging'] = False
                 self.dragging_ship = None
@@ -957,10 +1067,7 @@ class ShipPlacementView(BaseView):
                         ship_info['placed'] = False
                         break
 
-                # Возвращаем цвет текста, если удалили корабль после завершения расстановки
-                self.texts[-2].color = arcade.color.LIGHT_GREEN
-                self.texts[-2].text = "Enter - начать игру"
-
+                self._check_ready_state()
 
         elif symbol == arcade.key.ENTER:
             # Начало игры
@@ -991,8 +1098,6 @@ class GameView(BaseView):
         self.start_time = time.time()
         self.player_turn = True
         self.message = "Ваш ход: кликните по правому полю."
-        self.last_player_shot_time = 0
-        self.ai_delay = 0
         self.game_over = False
         self.victory_delay = 0
 
@@ -1010,7 +1115,11 @@ class GameView(BaseView):
 
         # --- ЭФФЕКТЫ ВСПЛЕСКОВ ---
         self.splashes = []
-        self.SPLASH_DURATION = 0.6  # Чуть увеличил длительность для красоты
+        self.SPLASH_DURATION = 0.6
+
+        # --- ИСПРАВЛЕНИЕ: Убираем адаптивную задержку, делаем простую ---
+        self.ai_delay = 0
+        self.ai_delay_fixed = 1.5  # Фиксированная задержка для ИИ (1.5 секунды)
 
     def _random_place_fleet(self, board: Board):
         """Случайное размещение флота."""
@@ -1146,15 +1255,18 @@ class GameView(BaseView):
         return (gx, gy) if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE else None
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
+        # ИСПРАВЛЕНИЕ: Убрали расчет времени реакции игрока
         if self.game_over or not self.player_turn or button != arcade.MOUSE_BUTTON_LEFT:
             return
 
         grid_pos = self._screen_to_grid(x, y, ENEMY_GRID_ORIGIN)
-        if not grid_pos: return
+        if not grid_pos:
+            return
 
         gx, gy = grid_pos
         result = self.enemy_board.shoot(gx, gy)
-        if result.already_shot: return
+        if result.already_shot:
+            return
 
         self.shots_total += 1
         if result.hit:
@@ -1162,8 +1274,12 @@ class GameView(BaseView):
             self.message = "Попадание!"
             arcade.play_sound(self.Popal_SOUND)
             # Красный всплеск (is_hit=True)
-            self.splashes.append({'x': gx, 'y': gy, 'board': self.enemy_board,
-                                  'time': self.SPLASH_DURATION, 'is_hit': True})
+            self.splashes.append({
+                'x': gx, 'y': gy,
+                'board': self.enemy_board,
+                'time': self.SPLASH_DURATION,
+                'is_hit': True
+            })
 
             if result.sunk_ship:
                 self.message = f"Корабль потоплен! ({result.sunk_ship.length}-палубный)"
@@ -1176,53 +1292,78 @@ class GameView(BaseView):
             self.message = "Промах!"
             arcade.play_sound(self.Miss_SOUND)
             # Синий всплеск (is_hit=False)
-            self.splashes.append({'x': gx, 'y': gy, 'board': self.enemy_board,
-                                  'time': self.SPLASH_DURATION, 'is_hit': False})
+            self.splashes.append({
+                'x': gx, 'y': gy,
+                'board': self.enemy_board,
+                'time': self.SPLASH_DURATION,
+                'is_hit': False
+            })
+            # Ход переходит ИИ с фиксированной задержкой
             self.player_turn = False
-            self.ai_delay = 1.5
+            self.ai_delay = self.ai_delay_fixed  # Фиксированная задержка
 
     def on_update(self, delta_time: float):
+        # Обновляем анимацию всплесков
         for splash in self.splashes[:]:
             splash['time'] -= delta_time
             if splash['time'] <= 0:
                 self.splashes.remove(splash)
 
+        # Если игра окончена, ждём паузу перед показом результатов
         if self.game_over:
             self.victory_delay -= delta_time
             if self.victory_delay <= 0:
                 self._finish_game(won=getattr(self, "_game_won", True))
             return
 
+        # Логика хода ИИ
         if not self.player_turn:
             if self.ai_delay > 0:
                 self.ai_delay -= delta_time
             else:
-                self._ai_turn()
+                # Задержка истекла, ИИ делает выстрел
+                x, y = self.ai.next_shot(
+                    self.player_board.hits,
+                    self.player_board.misses,
+                    self.player_board
+                )
+                result = self.player_board.shoot(x, y)
 
-    def _ai_turn(self):
-        x, y = self.ai.next_shot(self.player_board.hits, self.player_board.misses, self.player_board)
-        result = self.player_board.shoot(x, y)
+                if result.hit:
+                    self.message = "Компьютер попал!"
+                    arcade.play_sound(self.Popal_SOUND)
+                    # Красный всплеск для ИИ
+                    self.splashes.append({
+                        'x': x, 'y': y,
+                        'board': self.player_board,
+                        'time': self.SPLASH_DURATION,
+                        'is_hit': True
+                    })
 
-        if result.hit:
-            self.message = "Компьютер попал!"
-            arcade.play_sound(self.Popal_SOUND)
-            # Красный всплеск для ИИ
-            self.splashes.append({'x': x, 'y': y, 'board': self.player_board,
-                                  'time': self.SPLASH_DURATION, 'is_hit': True})
-            if result.sunk_ship: self.ai.reset_hunting()
-            if self.player_board.all_ships_destroyed():
-                self.game_over = True
-                self.victory_delay = 2.0
-                self._game_won = False
-            else:
-                self.ai_delay = 1.0
-        else:
-            self.message = "Компьютер промахнулся. Ваш ход."
-            arcade.play_sound(self.Miss_SOUND)
-            # Синий всплеск для ИИ
-            self.splashes.append({'x': x, 'y': y, 'board': self.player_board,
-                                  'time': self.SPLASH_DURATION, 'is_hit': False})
-            self.player_turn = True
+                    if result.sunk_ship:
+                        self.ai.reset_hunting()
+
+                    # Если ИИ попал и не все корабли потоплены,
+                    # он продолжает ход с фиксированной задержкой
+                    if not self.player_board.all_ships_destroyed():
+                        self.ai_delay = self.ai_delay_fixed
+                    else:
+                        # Все корабли потоплены - конец игры
+                        self.game_over = True
+                        self.victory_delay = 2.0
+                        self._game_won = False
+                else:
+                    # ИИ промахнулся - ход переходит игроку
+                    self.message = "Компьютер промахнулся. Ваш ход."
+                    arcade.play_sound(self.Miss_SOUND)
+                    # Синий всплеск для ИИ
+                    self.splashes.append({
+                        'x': x, 'y': y,
+                        'board': self.player_board,
+                        'time': self.SPLASH_DURATION,
+                        'is_hit': False
+                    })
+                    self.player_turn = True
 
     def _finish_game(self, won: bool):
         """Завершение игры."""
